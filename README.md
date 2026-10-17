@@ -1,4 +1,4 @@
-# Data Agents Capstone
+# Autonomous Data Warehouse Agents
 
 ## What it does
 - Discovery agent: catalog search and keyword-based data product recommendations.
