@@ -1,0 +1,206 @@
+{
+  "assets": [
+    {
+      "id": "customer_master",
+      "name": "Customer Master",
+      "description": "Trusted customer identity and profile dataset",
+      "domain": "Customer",
+      "tags": [
+        "customer",
+        "identity",
+        "PII"
+      ],
+      "owner": "Customer Data Team",
+      "quality_score": 96,
+      "schema": {
+        "customer_id": "string",
+        "full_name": "string",
+        "email": "string",
+        "region": "string"
+      }
+    },
+    {
+      "id": "loan_accounts",
+      "name": "Loan Accounts",
+      "description": "Automotive lending account balances and loan status",
+      "domain": "Lending",
+      "tags": [
+        "loan",
+        "credit",
+        "finance"
+      ],
+      "owner": "Credit Data Team",
+      "quality_score": 93,
+      "schema": {
+        "loan_id": "string",
+        "customer_id": "string",
+        "balance": "decimal",
+        "status": "string"
+      }
+    },
+    {
+      "id": "payment_events",
+      "name": "Payment Events",
+      "description": "Payment transactions for loan accounts",
+      "domain": "Payments",
+      "tags": [
+        "payment",
+        "transactions"
+      ],
+      "owner": "Payments Team",
+      "quality_score": 91,
+      "schema": {
+        "payment_id": "string",
+        "loan_id": "string",
+        "amount": "decimal",
+        "payment_date": "date"
+      }
+    },
+    {
+      "id": "credit_risk_mart",
+      "name": "Credit Risk Mart",
+      "description": "Credit exposure and delinquency analytics",
+      "domain": "Risk",
+      "tags": [
+        "risk",
+        "delinquency",
+        "credit"
+      ],
+      "owner": "Risk Analytics",
+      "quality_score": 95,
+      "schema": {
+        "loan_id": "string",
+        "customer_id": "string",
+        "exposure": "decimal",
+        "days_past_due": "integer"
+      }
+    },
+    {
+      "id": "risk_dashboard",
+      "name": "Risk Dashboard",
+      "description": "Portfolio risk reporting dashboard",
+      "domain": "Risk",
+      "tags": [
+        "dashboard",
+        "risk"
+      ],
+      "owner": "Risk Analytics",
+      "quality_score": 90,
+      "schema": {
+        "loan_id": "string",
+        "exposure": "decimal"
+      }
+    }
+  ],
+  "products": [
+    {
+      "id": "customer_360",
+      "name": "Customer 360 Data Product",
+      "description": "Unified customer profile for servicing and analytics",
+      "assets": [
+        "customer_master",
+        "loan_accounts"
+      ],
+      "tags": [
+        "customer",
+        "profile",
+        "servicing"
+      ],
+      "owner": "Customer Data Team"
+    },
+    {
+      "id": "credit_risk",
+      "name": "Credit Risk Data Product",
+      "description": "Loan exposure and delinquency insights",
+      "assets": [
+        "loan_accounts",
+        "payment_events",
+        "credit_risk_mart"
+      ],
+      "tags": [
+        "credit",
+        "risk",
+        "delinquency"
+      ],
+      "owner": "Risk Analytics"
+    }
+  ],
+  "lineage": [
+    {
+      "upstream": "customer_master",
+      "downstream": "loan_accounts",
+      "columns": {
+        "customer_id": [
+          "customer_id"
+        ]
+      }
+    },
+    {
+      "upstream": "loan_accounts",
+      "downstream": "credit_risk_mart",
+      "columns": {
+        "loan_id": [
+          "loan_id"
+        ],
+        "customer_id": [
+          "customer_id"
+        ],
+        "balance": [
+          "exposure"
+        ]
+      }
+    },
+    {
+      "upstream": "payment_events",
+      "downstream": "credit_risk_mart",
+      "columns": {
+        "loan_id": [
+          "loan_id"
+        ]
+      }
+    },
+    {
+      "upstream": "credit_risk_mart",
+      "downstream": "risk_dashboard",
+      "columns": {
+        "loan_id": [
+          "loan_id"
+        ],
+        "exposure": [
+          "exposure"
+        ]
+      }
+    }
+  ],
+  "schema_change_requests": [
+    {
+      "request_id": "bd62e4e4-5a58-488b-b556-b60698fa4598",
+      "asset_id": "loan_accounts",
+      "status": "PENDING",
+      "created_at": "2026-10-15T19:08:51.945092+00:00",
+      "base_version": 1,
+      "registered_schema": {
+        "loan_id": "string",
+        "customer_id": "string",
+        "balance": "decimal",
+        "status": "string"
+      },
+      "incoming_schema": {
+        "loan_id": "string",
+        "customer_id": "string",
+        "balance": "string",
+        "status": "string",
+        "currency": "string"
+      },
+      "severity": "HIGH",
+      "documentation": {
+        "summary": "Schema drift detected; human review required",
+        "change_notes": [
+          "Added column: currency (string)",
+          "Changed balance: decimal -> string"
+        ],
+        "compatibility": "Potentially breaking"
+      }
+    }
+  ]
+}

@@ -1,0 +1,86 @@
+{
+  "terms": [
+    {
+      "id": "glossary_customer_360",
+      "term": "Customer 360",
+      "definition": "A consolidated view of customer identity, profile, and related lending relationships used for servicing and analytics.",
+      "synonyms": [
+        "single customer view",
+        "unified customer profile"
+      ],
+      "domain": "Customer",
+      "related_assets": [
+        "customer_master",
+        "loan_accounts"
+      ],
+      "related_products": [
+        "customer_360"
+      ]
+    },
+    {
+      "id": "glossary_credit_exposure",
+      "term": "Credit Exposure",
+      "definition": "The outstanding lending balance representing financial exposure to a borrower or portfolio.",
+      "synonyms": [
+        "outstanding balance",
+        "loan exposure"
+      ],
+      "domain": "Risk",
+      "related_assets": [
+        "loan_accounts",
+        "credit_risk_mart"
+      ],
+      "related_products": [
+        "credit_risk"
+      ]
+    },
+    {
+      "id": "glossary_delinquency",
+      "term": "Delinquency",
+      "definition": "A loan payment obligation that is overdue; commonly analyzed using days past due.",
+      "synonyms": [
+        "overdue payment",
+        "past due"
+      ],
+      "domain": "Risk",
+      "related_assets": [
+        "credit_risk_mart",
+        "payment_events"
+      ],
+      "related_products": [
+        "credit_risk"
+      ]
+    },
+    {
+      "id": "glossary_data_product",
+      "term": "Data Product",
+      "definition": "A discoverable and governed data offering with defined ownership, consumers, metadata, and fitness for use.",
+      "synonyms": [
+        "reusable dataset",
+        "curated data offering"
+      ],
+      "domain": "Governance",
+      "related_assets": [],
+      "related_products": [
+        "customer_360",
+        "credit_risk"
+      ]
+    },
+    {
+      "id": "glossary_pii",
+      "term": "Personally Identifiable Information",
+      "definition": "Information that identifies or can reasonably be linked to an individual and requires appropriate access controls.",
+      "synonyms": [
+        "PII",
+        "personal data"
+      ],
+      "domain": "Governance",
+      "related_assets": [
+        "customer_master"
+      ],
+      "related_products": [
+        "customer_360"
+      ]
+    }
+  ]
+}

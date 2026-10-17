@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "metadata-catalog": {
+      "command": "python",
+      "args": ["mcp_servers/metadata_server.py"],
+      "transport": "stdio"
+    }
+  }
+}
