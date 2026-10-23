@@ -14,8 +14,8 @@ from app.guardrails import validate_question
 
 ROOT = Path(__file__).resolve().parent
 CATALOG_PATH = ROOT / "data" / "catalog.json"
-UI_MODES = ("Automatic", "Discovery", "Impact Analysis", "Schema Drift")
-SPECIALIST_MODES = {"Discovery": "Discovery", "Impact Analysis": "Impact", "Schema Drift": "Schema Drift"}
+UI_MODES = ("Autonomous", "Data Discovery", "Impact Assessment", "Schema Evolution")
+SPECIALIST_MODES = {"Data Discovery": "Discovery", "Impact Assessment": "Impact", "Schema Evolution": "Schema Drift"}
 
 st.set_page_config(
     page_title="Data Agents Capstone",
@@ -186,18 +186,29 @@ def render_specialist_trace(tool_calls, latency_ms):
 if "history_by_selection" not in st.session_state:
     st.session_state.history_by_selection = {mode: [] for mode in UI_MODES}
     # Preserve the prior automatic-mode conversation after upgrading the UI.
-    st.session_state.history_by_selection["Automatic"] = list(
-        st.session_state.get("auto_history", [])
+    st.session_state.history_by_selection["Autonomous"] = list(
+        st.session_state.get("Autonomous", st.session_state.get("auto_history", []))
     )
+# Migrate histories from previous UI labels without changing specialist routing.
+for old_label, new_label in {
+    "Automatic": "Autonomous",
+    "Discovery": "Data Discovery",
+    "Impact Analysis": "Impact Assessment",
+    "Schema Drift": "Schema Evolution",
+}.items():
+    if old_label in st.session_state.history_by_selection:
+        previous = st.session_state.history_by_selection.pop(old_label)
+        existing = st.session_state.history_by_selection.get(new_label, [])
+        st.session_state.history_by_selection[new_label] = existing or previous
 for selection in UI_MODES:
     st.session_state.history_by_selection.setdefault(selection, [])
 
 with st.sidebar:
     selected_mode = st.radio("Agent selection", UI_MODES, index=0)
     st.caption(
-        "Automatic routes queries to one specialist or invokes the "
+        "Autonomous routes queries to one specialist or invokes the "
         "internal Coordinator when multiple agents are required."
-        if selected_mode == "Automatic"
+        if selected_mode == "Autonomous"
         else f"Directly invokes the {selected_mode} agent."
     )
     st.write("MCP servers:", ", ".join(load_config().keys()))
@@ -215,22 +226,22 @@ except Exception as exc:
 
 # Show a relevant, copyable reference query for the currently selected agent.
 SAMPLE_QUERIES = {
-    "Automatic": (
+    "Autonomous": (
         'For loan_accounts, detect schema drift using incoming schema '
         '{"loan_id":"string","customer_id":"string","balance":"decimal",'
         '"status":"string","risk_category":"string"}. '
         'Create a schema change proposal, analyze downstream impact, '
         'and recommend relevant data products.'
     ),
-    "Discovery": (
+    "Data Discovery": (
         "I need a unified borrower view for loan servicing. "
         "Find relevant data products and explain the related business glossary terms."
     ),
-    "Impact Analysis": (
+    "Impact Assessment": (
         "Analyze the downstream impact of changing loan_accounts.balance "
         "from decimal to string. Identify affected datasets and columns."
     ),
-    "Schema Drift": (
+    "Schema Evolution": (
         'Detect schema drift for loan_accounts using this incoming schema: '
         '{"loan_id":"string","customer_id":"string","balance":"string",'
         '"status":"string","currency":"string"}. '
@@ -265,7 +276,7 @@ if question := st.chat_input("Ask about enterprise metadata..."):
             # Validate the original request before routing or calling any agent.
             clean_question = validate_question(question)
             history.append({"role": "user", "content": clean_question})
-            if selected_mode == "Automatic":
+            if selected_mode == "Autonomous":
                 plan = coordinator.plan_query(clean_question)
                 use_coordinator = len(plan) > 1
                 specialist_mode = plan[0] if not use_coordinator else None
@@ -297,11 +308,11 @@ if question := st.chat_input("Ask about enterprise metadata..."):
             st.error(f"Agent execution failed: {exc}")
             history.append({"role": "assistant", "content": f"Agent execution failed: {exc}"})
 
-# Show schema approvals only for Automatic and Schema Drift modes.
-if selected_mode in ("Automatic", "Schema Drift"):
+# Show schema approvals only for Autonomous and Schema Evolution modes.
+if selected_mode in ("Autonomous", "Schema Evolution"):
     # Human approval queue
     st.divider()
-    st.subheader("Schema Drift — Human Approval Queue")
+    st.subheader("Schema Evolution — Human Approval Queue")
     try:
         pending_requests = get_pending_requests()
     except (OSError, ValueError, TypeError) as exc:
