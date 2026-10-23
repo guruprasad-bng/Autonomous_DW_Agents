@@ -245,14 +245,17 @@ def resolve_schema_change(
     if asset is None:
         return {"error": "Asset not found"}
 
-    # Prevent approval of a stale proposal.
-    if (
+    # A stale proposal may be rejected/closed, but must never be approved.
+    stale = (
         asset["schema"] != request["registered_schema"]
-        or asset.get("schema_version", 1)
-           != request["base_version"]
-    ):
+        or asset.get("schema_version", 1) != request["base_version"]
+    )
+    if stale and decision == "APPROVE":
         return {
-            "error": "Catalog changed since proposal; re-review required"
+            "error": "Catalog changed since proposal; approval blocked. Reject the stale request and submit a new proposal if needed.",
+            "code": "STALE_PROPOSAL",
+            "current_version": asset.get("schema_version", 1),
+            "base_version": request["base_version"],
         }
 
     request["reviewer"] = reviewer
