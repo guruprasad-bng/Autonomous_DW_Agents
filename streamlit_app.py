@@ -39,42 +39,105 @@ def get_coordinator():
     return CoordinatorAgent(get_agent())
 
 
-def get_pending_requests():
+def get_catalog_snapshot():
     if not CATALOG_PATH.exists():
-        return []
-    catalog = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
-    return [
-        request
-        for request in catalog.get("schema_change_requests", [])
-        if request.get("status") == "PENDING"
-    ]
+        raise FileNotFoundError(f"Catalog not found: {CATALOG_PATH}")
+    return json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
+
+
+def get_pending_requests():
+    catalog = get_catalog_snapshot()
+    assets = {asset["id"]: asset for asset in catalog.get("assets", [])}
+    pending = []
+    for request in catalog.get("schema_change_requests", []):
+        if request.get("status") != "PENDING":
+            continue
+        asset = assets.get(request.get("asset_id"))
+        current_schema = asset.get("schema", {}) if asset else None
+        current_version = asset.get("schema_version", 1) if asset else None
+        stale = (
+            asset is None
+            or current_schema != request.get("registered_schema")
+            or current_version != request.get("base_version", 1)
+        )
+        pending.append({
+            **request,
+            "_current_schema": current_schema,
+            "_current_version": current_version,
+            "_stale": stale,
+            "_already_applied": asset is not None and current_schema == request.get("incoming_schema"),
+        })
+    return pending
+
+
+def _unwrap_mcp_result(result):
+    """Normalize LangChain MCP tool results; never mistake an error for success."""
+    if getattr(result, "isError", False):
+        raise RuntimeError(str(result))
+    if isinstance(result, dict):
+        payload = result
+    elif isinstance(result, str):
+        try:
+            payload = json.loads(result)
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Unexpected approval response: {result[:300]}") from exc
+    elif isinstance(result, list):
+        text_blocks = []
+        for block in result:
+            if isinstance(block, dict) and block.get("text") is not None:
+                text_blocks.append(str(block["text"]))
+            elif getattr(block, "text", None) is not None:
+                text_blocks.append(str(block.text))
+        if not text_blocks:
+            raise RuntimeError(f"Approval tool returned no readable result: {result!r}")
+        try:
+            payload = json.loads(text_blocks[0])
+        except json.JSONDecodeError as exc:
+            raise RuntimeError(f"Unexpected approval response: {text_blocks[0][:300]}") from exc
+    else:
+        content = getattr(result, "content", None)
+        if content is not None:
+            return _unwrap_mcp_result(content)
+        raise RuntimeError(f"Unsupported approval result type: {type(result).__name__}")
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"Invalid approval response: {payload!r}")
+    if payload.get("error") or payload.get("isError"):
+        raise RuntimeError(str(payload.get("error") or payload))
+    if payload.get("status") not in {"APPROVED", "REJECTED"}:
+        raise RuntimeError(f"Unexpected approval status: {payload!r}")
+    return payload
 
 
 def process_approval(request_id, decision, reviewer):
     # Demo-only trusted UI path. Production requires authenticated authorization.
     tools, _ = load_mcp_tools()
     approval_tool = next(
-        (tool for tool in tools if tool.name == "resolve_schema_change"),
-        None,
+        (tool for tool in tools if tool.name == "resolve_schema_change"), None
     )
     if approval_tool is None:
         raise RuntimeError("MCP tool resolve_schema_change is unavailable")
 
-    result = asyncio.run(
-        approval_tool.ainvoke(
-            {
-                "request_id": request_id,
-                "decision": decision,
-                "reviewer": reviewer,
-            }
-        )
+    raw = asyncio.run(approval_tool.ainvoke({
+        "request_id": request_id, "decision": decision, "reviewer": reviewer,
+    }))
+    outcome = _unwrap_mcp_result(raw)
+
+    # Read from disk to verify persistence, not just the tool's response.
+    catalog = get_catalog_snapshot()
+    stored_request = next(
+        (r for r in catalog.get("schema_change_requests", [])
+         if r.get("request_id") == request_id), None
     )
-    # MCP tools may return a string, dictionary, or a structured tool message.
-    if isinstance(result, dict) and (result.get("error") or result.get("isError")):
-        raise RuntimeError(str(result))
-    if getattr(result, "isError", False):
-        raise RuntimeError(str(result))
-    return result
+    if stored_request is None or stored_request.get("status") != outcome["status"]:
+        raise RuntimeError("Approval response received, but catalog request status was not persisted")
+    if decision == "APPROVE":
+        asset = next((a for a in catalog.get("assets", [])
+                      if a.get("id") == stored_request.get("asset_id")), None)
+        if not asset or asset.get("schema") != stored_request.get("incoming_schema"):
+            raise RuntimeError("Approval recorded, but the registered asset schema was not updated")
+        if asset.get("schema_version", 1) != outcome.get("new_version"):
+            raise RuntimeError("Approval recorded, but the asset schema version is inconsistent")
+    return outcome
 
 
 def render_handoff_trace(handoffs, plan):
@@ -150,12 +213,34 @@ except Exception as exc:
     st.error(f"Initialization failed: {exc}")
     st.stop()
 
-with st.expander("Example questions", expanded=False):
-    st.markdown("""- **Discovery:** Find relevant data products for a unified borrower view and explain glossary terms.
-- **Impact:** Analyze downstream impact if `loan_accounts.balance` changes.
-- **Schema Drift:** Check schema drift for `loan_accounts` using an incoming schema.
-- **Multi-agent:** A new field `risk_category` is being introduced in `loan_accounts`. Detect schema drift, analyze downstream impact, and recommend related data products.
-""")
+# Show a relevant, copyable reference query for the currently selected agent.
+SAMPLE_QUERIES = {
+    "Automatic": (
+        'For loan_accounts, detect schema drift using incoming schema '
+        '{"loan_id":"string","customer_id":"string","balance":"decimal",'
+        '"status":"string","risk_category":"string"}. '
+        'Create a schema change proposal, analyze downstream impact, '
+        'and recommend relevant data products.'
+    ),
+    "Discovery": (
+        "I need a unified borrower view for loan servicing. "
+        "Find relevant data products and explain the related business glossary terms."
+    ),
+    "Impact Analysis": (
+        "Analyze the downstream impact of changing loan_accounts.balance "
+        "from decimal to string. Identify affected datasets and columns."
+    ),
+    "Schema Drift": (
+        'Detect schema drift for loan_accounts using this incoming schema: '
+        '{"loan_id":"string","customer_id":"string","balance":"string",'
+        '"status":"string","currency":"string"}. '
+        'Create an approval request for the detected changes.'
+    ),
+}
+
+st.markdown(f"**Sample query — {selected_mode}**")
+st.code(SAMPLE_QUERIES[selected_mode], language=None, wrap_lines=True)
+st.caption("Copy the sample query above and paste it into the chat box below.")
 
 history = st.session_state.history_by_selection[selected_mode]
 
@@ -212,65 +297,77 @@ if question := st.chat_input("Ask about enterprise metadata..."):
             st.error(f"Agent execution failed: {exc}")
             history.append({"role": "assistant", "content": f"Agent execution failed: {exc}"})
 
-# Approval queue is accessible regardless of which specialist was invoked.
-st.divider()
-st.subheader("Schema Drift — Human Approval Queue")
-try:
-    pending_requests = get_pending_requests()
-except (OSError, ValueError, TypeError) as exc:
-    st.error(f"Unable to read approval queue: {exc}")
-    pending_requests = []
+# Show schema approvals only for Automatic and Schema Drift modes.
+if selected_mode in ("Automatic", "Schema Drift"):
+    # Human approval queue
+    st.divider()
+    st.subheader("Schema Drift — Human Approval Queue")
+    try:
+        pending_requests = get_pending_requests()
+    except (OSError, ValueError, TypeError) as exc:
+        st.error(f"Unable to read approval queue: {exc}")
+        pending_requests = []
 
-if not pending_requests:
-    st.info("No schema changes awaiting approval.")
-else:
-    reviewer = st.text_input(
-        "Reviewer Name", placeholder="Enter your name"
-    )
-    for request in pending_requests:
-        request_id = request.get("request_id", "")
-        with st.container(border=True):
-            st.write("**Asset ID:**", request.get("asset_id", ""))
-            st.write("**Request ID:**", request_id)
-            st.write("**Severity:**", request.get("severity", ""))
-            st.write("### Proposed Documentation")
-            st.json(request.get("documentation", {}))
+    if not pending_requests:
+        st.info("No schema changes awaiting approval.")
+    else:
+        reviewer = st.text_input(
+            "Reviewer Name", placeholder="Enter your name"
+        )
+        for request in pending_requests:
+            request_id = request.get("request_id", "")
+            with st.container(border=True):
+                st.write("**Asset ID:**", request.get("asset_id", ""))
+                st.write("**Request ID:**", request_id)
+                st.write("**Severity:**", request.get("severity", ""))
+                if request.get("_stale"):
+                    if request.get("_already_applied"):
+                        st.warning("This proposal is outdated: its schema is already registered. Approval is disabled. You may reject the duplicate request.")
+                    else:
+                        st.warning("This proposal is outdated because the registered schema changed after it was created. Approval is disabled; create a new proposal based on the current schema.")
+                st.write("**Current registered version:**", request.get("_current_version", "unknown"))
+                st.write("**Proposal base version:**", request.get("base_version", 1))
+                st.write("### Proposed Documentation")
+                st.json(request.get("documentation", {}))
 
-            with st.expander("Compare Schemas"):
+                with st.expander("Compare Schemas"):
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        st.write("Current Registered Schema (live catalog)")
+                        st.json(request.get("_current_schema"))
+                        with st.expander("Schema at proposal creation"):
+                            st.json(request.get("registered_schema", {}))
+                    with col2:
+                        st.write("Proposed Schema")
+                        st.json(request.get("incoming_schema", {}))
+
                 col1, col2 = st.columns(2)
                 with col1:
-                    st.write("Current Schema")
-                    st.json(request.get("registered_schema", {}))
+                    approve = st.button(
+                        "Approve",
+                        key=f"approve_{request_id}",
+                        disabled=not reviewer.strip() or request.get("_stale", False),
+                    )
                 with col2:
-                    st.write("Proposed Schema")
-                    st.json(request.get("incoming_schema", {}))
-
-            col1, col2 = st.columns(2)
-            with col1:
-                approve = st.button(
-                    "Approve",
-                    key=f"approve_{request_id}",
-                    disabled=not reviewer.strip(),
-                )
-            with col2:
-                reject = st.button(
-                    "Reject",
-                    key=f"reject_{request_id}",
-                    disabled=not reviewer.strip(),
-                )
-
-            if approve or reject:
-                decision = "APPROVE" if approve else "REJECT"
-                try:
-                    outcome = process_approval(
-                        request_id, decision, reviewer.strip()
+                    reject = st.button(
+                        "Reject",
+                        key=f"reject_{request_id}",
+                        disabled=not reviewer.strip(),
                     )
-                    st.session_state["last_approval_result"] = (
-                        f"{decision} request {request_id}: {outcome}"
-                    )
-                    st.rerun()
-                except Exception as exc:
-                    st.error(f"{decision} failed: {exc}")
 
-if st.session_state.get("last_approval_result"):
-    st.success(st.session_state.pop("last_approval_result"))
+                if approve or reject:
+                    decision = "APPROVE" if approve else "REJECT"
+                    try:
+                        outcome = process_approval(
+                            request_id, decision, reviewer.strip()
+                        )
+                        st.session_state["last_approval_result"] = (
+                            f"{outcome['status']} request {request_id} for {outcome.get('asset_id')}. "
+                            + (f"Registered schema updated to version {outcome['new_version']}." if outcome.get('schema_updated') else "No schema changes applied.")
+                        )
+                        st.rerun()
+                    except Exception as exc:
+                        st.error(f"{decision} failed: {exc}")
+
+    if st.session_state.get("last_approval_result"):
+        st.success(st.session_state.pop("last_approval_result"))
