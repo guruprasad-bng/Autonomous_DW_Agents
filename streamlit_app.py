@@ -211,9 +211,18 @@ with st.sidebar:
         if selected_mode == "Autonomous"
         else f"Directly invokes the {selected_mode} agent."
     )
+    # Hide the Schema Evolution review panel until a query is run in this mode.
+    # Reset when switching modes, but keep it visible during approval reruns.
+    previous_mode = st.session_state.get("_previous_agent_mode")
+    if previous_mode != selected_mode:
+        if selected_mode == "Schema Evolution":
+            st.session_state["schema_evolution_query_executed"] = False
+        st.session_state["_previous_agent_mode"] = selected_mode
     st.write("MCP servers:", ", ".join(load_config().keys()))
     if st.button("Clear chat"):
         st.session_state.history_by_selection[selected_mode] = []
+        if selected_mode == "Schema Evolution":
+            st.session_state["schema_evolution_query_executed"] = False
         st.cache_resource.clear()
         st.rerun()
 
@@ -304,12 +313,19 @@ if question := st.chat_input("Ask about enterprise metadata..."):
                 assistant_entry["latency_ms"] = result.latency_ms
                 render_specialist_trace(result.tool_calls, result.latency_ms)
             history.append(assistant_entry)
+            if selected_mode == "Schema Evolution":
+                # Reveal the queue only after the submitted query has completed.
+                # The catalog is re-read below, including any newly created proposal.
+                st.session_state["schema_evolution_query_executed"] = True
         except Exception as exc:
             st.error(f"Agent execution failed: {exc}")
             history.append({"role": "assistant", "content": f"Agent execution failed: {exc}"})
 
 # Show schema approvals only for Autonomous and Schema Evolution modes.
-if selected_mode in ("Autonomous", "Schema Evolution"):
+if selected_mode == "Autonomous" or (
+    selected_mode == "Schema Evolution"
+    and st.session_state.get("schema_evolution_query_executed", False)
+):
     # Human approval queue
     st.divider()
     st.subheader("Schema Evolution — Human Approval Queue")
@@ -325,7 +341,33 @@ if selected_mode in ("Autonomous", "Schema Evolution"):
         reviewer = st.text_input(
             "Reviewer Name", placeholder="Enter your name"
         )
-        for request in pending_requests:
+        # Show one proposal at a time. Multiple pending requests are still
+        # accessible via the selector, but documentation is not repeated.
+        if len(pending_requests) > 1:
+            st.caption(f"{len(pending_requests)} pending schema change requests. Select one to review.")
+            request_options = {
+                r["request_id"]: (
+                    f"{r.get('asset_id', 'Unknown asset')} | "
+                    f"{r.get('severity', 'Unknown severity')} | "
+                    f"{r['request_id'][:8]}"
+                    + (" | OUTDATED" if r.get("_stale") else "")
+                )
+                for r in pending_requests
+            }
+            selected_request_id = st.selectbox(
+                "Schema change request",
+                options=list(request_options),
+                format_func=lambda request_id: request_options[request_id],
+                key="schema_change_selected_request",
+            )
+            visible_requests = [
+                r for r in pending_requests
+                if r.get("request_id") == selected_request_id
+            ]
+        else:
+            visible_requests = pending_requests
+
+        for request in visible_requests:
             request_id = request.get("request_id", "")
             with st.container(border=True):
                 st.write("**Asset ID:**", request.get("asset_id", ""))
